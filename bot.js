@@ -31,9 +31,15 @@ async function main() {
             const toBlock = await provider.getBlockNumber();
 
             for (let contract of contracts) {
+                try {
+                    ethers.utils.getAddress(contract)
+                } catch {
+                    continue;
+                }
+
                 const parsedLogs = await getParsedLogs(
                     provider,
-                    contract.trim(),
+                    contract,
                     fromBlock,
                     toBlock <= fromBlock ? undefined : toBlock
                 );
@@ -48,7 +54,7 @@ async function main() {
             }
 
             await fs.writeFile("./latestBlock.txt", toBlock.toString());
-            return;
+            break;
         }
         catch (e) {
             console.warn(`error = ${JSON.stringify(e)}`)
