@@ -12,7 +12,7 @@
                 "<node_internals>/**"
             ],
             "program": "${workspaceFolder}/bot.js",
-            "envFile": "${workspaceFolder}/.env"
+            "runtimeArgs": ["--env-file=local.env"]
         }
     ]
 }

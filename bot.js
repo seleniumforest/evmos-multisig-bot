@@ -33,7 +33,7 @@ async function main() {
             for (let contract of contracts) {
                 const parsedLogs = await getParsedLogs(
                     provider,
-                    contract,
+                    contract.trim(),
                     fromBlock,
                     toBlock <= fromBlock ? undefined : toBlock
                 );
@@ -78,7 +78,7 @@ async function getFromBlock(provider) {
 async function getParsedLogs(provider, address, fromBlock, toBlock) {
     let result = [];
     let logs = await provider.getLogs({ address, fromBlock, toBlock })
-
+    console.log(address);
     for (let log of logs) {
         try {
             const iface = new ethers.utils.Interface(abi);
