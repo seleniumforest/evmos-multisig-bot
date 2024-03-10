@@ -1,7 +1,10 @@
 https://evmos-jsonrpc.alkadeta.com
-https://evmos-mainnet.public.blastapi.io
 https://evmos-jsonrpc.theamsolutions.info
 https://evmos-evm.publicnode.com
 https://evmos-pokt.nodies.app
 https://json-rpc.evmos.blockhunters.org
 https://evmos.lava.build
+https://evmos-json-rpc.0base.dev
+https://alphab.ai/rpc/eth/evmos
+https://evmos.api.onfinality.io/public
+https://evm-rpc.evmos.silentvalidator.com

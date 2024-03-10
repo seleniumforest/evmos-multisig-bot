@@ -16,10 +16,10 @@ async function main() {
     console.log(`${new Date()}: checking txs`);
 
     let rpcs = (await fs.readFile("./rpcs.txt", { encoding: "utf-8" }))
-        .split("\n");
+        .split("\n").map(x => x.trim());
 
     let contracts = (await fs.readFile("./contracts.txt", { encoding: "utf-8" }))
-        .split("\n");
+        .split("\n").map(x => x.trim());
 
     for (let rpc of _.shuffle(rpcs)) {
         try {
@@ -77,8 +77,8 @@ async function getFromBlock(provider) {
 
 async function getParsedLogs(provider, address, fromBlock, toBlock) {
     let result = [];
-    let logs = await provider.getLogs({ address, fromBlock, toBlock })
-    console.log(address);
+    let logs = await provider.getLogs({ address, fromBlock, toBlock });
+
     for (let log of logs) {
         try {
             const iface = new ethers.utils.Interface(abi);
