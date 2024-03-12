@@ -13,7 +13,7 @@ async function main() {
     console.log(`${new Date()}: checking txs`);
 
     let rpcs = (await fs.readFile("./rpcs.txt", { encoding: "utf-8" }))
-        .split("\n").map(x => x.trim());
+        .split(/\r?\n|\r|\n/g).map(x => x.trim());
 
     let contracts = (await fs.readFile("./contracts.txt", { encoding: "utf-8" }))
         .split(/\r?\n|\r|\n/g).map(x => {
