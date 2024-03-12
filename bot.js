@@ -9,9 +9,6 @@ bot.launch();
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-setInterval(main, 60000)
-main();
-
 async function main() {
     console.log(`${new Date()}: checking txs`);
 
@@ -19,7 +16,11 @@ async function main() {
         .split("\n").map(x => x.trim());
 
     let contracts = (await fs.readFile("./contracts.txt", { encoding: "utf-8" }))
-        .split("\n").map(x => x.trim());
+        .split(/\r?\n|\r|\n/g).map(x => {
+            let [contract, alias] = x.split(";");
+            return { contract, alias }
+        });
+    let txsProcessed = [];
 
     for (let rpc of _.shuffle(rpcs)) {
         try {
@@ -30,7 +31,7 @@ async function main() {
 
             const toBlock = await provider.getBlockNumber();
 
-            for (let contract of contracts) {
+            for (let { contract, alias } of contracts) {
                 try {
                     ethers.utils.getAddress(contract)
                 } catch {
@@ -46,22 +47,39 @@ async function main() {
                 console.log(`found ${parsedLogs.length} transactions on contract ${contract} from block ${fromBlock} to block ${toBlock}`);
 
                 for (let { log } of parsedLogs) {
-                    await bot.telegram.sendMessage(
-                        process.env.TG_CHANNEL,
-                        `contract ${contract} block ${log.blockNumber} txhash: ${log.transactionHash.toString()}`
-                    )
+                    let txhash = log.transactionHash.toString();
+
+                    if (!txsProcessed.includes(txhash))
+                        await notify(alias || contract, log.blockNumber, txhash);
+
+                    txsProcessed.push(txhash);
                 }
+
+                //avoid possible 429's
+                await new Promise(res => setTimeout(res, 1000));
             }
 
             await fs.writeFile("./latestBlock.txt", toBlock.toString());
             break;
         }
         catch (e) {
-            console.warn(`error = ${JSON.stringify(e)}`)
+            console.warn(`${new Date()} error = ${JSON.stringify(e)}`)
         }
     }
     console.log(`${new Date()}: finished checking txs`);
 };
+
+async function notify(contract, block, txhash) {
+    await bot.telegram.sendMessage(
+        process.env.TG_CHANNEL,
+        `Multisig ${contract} \n` +
+        `Block ${block} \n` +
+        `<a href='https://escan.live/tx/${txhash}'>TX link</a>`,
+        {
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+        })
+}
 
 async function getFromBlock(provider) {
     let savedBlock;
@@ -77,6 +95,10 @@ async function getFromBlock(provider) {
     //rpc is out of sync
     if (savedBlock > rpcBlock)
         return null;
+
+    //latestBlock is outdated and it's not possible to get logs from rpc, so just start from latest block
+    if (rpcBlock - savedBlock > 9999)
+        return rpcBlock
 
     return savedBlock;
 }
@@ -118,3 +140,14 @@ const abi = [{
     "name": "SafeMultiSigTransaction",
     "type": "event"
 }];
+
+function run() {
+    try {
+        main();
+    } catch (e) {
+        console.log(`${new Date()} + ${JSON.stringify(e)}`)
+    }
+}
+
+setInterval(run, 60000);
+run()
