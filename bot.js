@@ -89,6 +89,10 @@ async function getFromBlock(provider) {
     } catch { }
 
     let rpcBlock = await provider.getBlockNumber();
+    //some rpcs return wrong block number
+    if (rpcBlock > 400000000)
+        return null;
+
     if (!savedBlock)
         return rpcBlock;
 
