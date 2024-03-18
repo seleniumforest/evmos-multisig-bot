@@ -12,29 +12,34 @@ process.once('SIGTERM', () => bot.stop('SIGTERM'));
 async function main() {
     console.log(`${new Date()}: checking txs`);
 
-    let rpcs = (await fs.readFile("./rpcs.txt", { encoding: "utf-8" }))
-        .split(/\r?\n|\r|\n/g).map(x => x.trim());
+    let rpcs = await getReliableRpcs();
+    let fromBlock = await getFromBlock(rpcs);
+    if (!fromBlock) {
+        throw new Exception("wrong fromBlock");
+    }
 
     let contracts = (await fs.readFile("./contracts.txt", { encoding: "utf-8" }))
-        .split(/\r?\n|\r|\n/g).map(x => {
+        .split(/\r?\n|\r|\n/g)
+        .map(x => {
             let [contract, alias] = x.split(";");
             return { contract, alias }
-        });
-    let txsProcessed = [];
+        })
+        .filter(x => x.contract);
 
-    for (let rpc of _.shuffle(rpcs)) {
+    let collectedLogs = [];
+    for (let { rpc } of _.shuffle(rpcs)) {
         try {
             const provider = new ethers.providers.JsonRpcProvider(rpc);
-            const fromBlock = await getFromBlock(provider);
-            if (!fromBlock)
+            const rpcBlock = await awaitWithTimeout(provider.getBlockNumber(), 10000)
+            if (rpcBlock <= fromBlock)
                 continue;
-
-            const toBlock = await provider.getBlockNumber();
+            const toBlock = rpcBlock;
 
             for (let { contract, alias } of contracts) {
                 try {
-                    ethers.utils.getAddress(contract)
+                    ethers.utils.getAddress(contract);
                 } catch {
+                    console.warn(`wrong contract ${contract}`);
                     continue;
                 }
 
@@ -42,30 +47,47 @@ async function main() {
                     provider,
                     contract,
                     fromBlock,
-                    toBlock <= fromBlock ? undefined : toBlock
+                    toBlock
                 );
-                console.log(`found ${parsedLogs.length} transactions on contract ${contract} from block ${fromBlock} to block ${toBlock}`);
 
-                for (let { log } of parsedLogs) {
-                    let txhash = log.transactionHash.toString();
-
-                    if (!txsProcessed.includes(txhash))
-                        await notify(alias || contract, log.blockNumber, txhash);
-
-                    txsProcessed.push(txhash);
-                }
+                collectedLogs.push({
+                    parsedLogs,
+                    contract: { contract, alias },
+                    fromBlock,
+                    toBlock,
+                    rpc
+                });
 
                 //avoid possible 429's
                 await new Promise(res => setTimeout(res, 1000));
             }
 
-            await fs.writeFile("./latestBlock.txt", toBlock.toString());
+            await fs.writeFile("./latestBlock.txt", (toBlock + 1).toString());
             break;
         }
         catch (e) {
-            console.warn(`${new Date()} error = ${JSON.stringify(e)}`)
+            console.warn(`${new Date()} error = ${JSON.stringify(e)}`);
+            collectedLogs = [];
         }
     }
+
+    for (let {
+        parsedLogs,
+        contract,
+        fromBlock,
+        rpc,
+        toBlock
+    } of collectedLogs) {
+        console.log(`found ${parsedLogs.length} txs on ${contract.contract} from ${fromBlock} to ${toBlock} rpc ${rpc}`);
+        for (const { log } of parsedLogs) {
+            try {
+                await notify(contract.alias || contract.contract, log.blockNumber, log.transactionHash.toString());
+            } catch (e) { console.error(`${new Date()} + ${JSON.stringify(e)}`) }
+        }
+        //avoid possible 429's
+        await new Promise(res => setTimeout(res, 1000));
+    }
+
     console.log(`${new Date()}: finished checking txs`);
 };
 
@@ -81,30 +103,53 @@ async function notify(contract, block, txhash) {
         })
 }
 
-async function getFromBlock(provider) {
+async function getFromBlock(reliableRpcs) {
     let savedBlock;
     try {
         let fileResult = await fs.readFile("./latestBlock.txt", { encoding: "utf-8" });
         savedBlock = Number(fileResult);
     } catch { }
 
-    let rpcBlock = await provider.getBlockNumber();
-    //some rpcs return wrong block number
-    if (rpcBlock > 400000000)
-        return null;
-
+    let rpcLatestBlock = Math.max(...reliableRpcs.map(x => x.height));
     if (!savedBlock)
-        return rpcBlock;
+        return rpcLatestBlock;
 
-    //rpc is out of sync
-    if (savedBlock > rpcBlock)
-        return null;
-
-    //latestBlock is outdated and it's not possible to get logs from rpc, so just start from latest block
-    if (rpcBlock - savedBlock > 9999)
-        return rpcBlock
+    if (Math.abs(savedBlock - rpcLatestBlock) > 9999)
+        return rpcLatestBlock;
 
     return savedBlock;
+}
+
+async function getReliableRpcs() {
+    let rpcs = (await fs.readFile("./rpcs.txt", { encoding: "utf-8" }))
+        .split(/\r?\n|\r|\n/g).map(x => x.trim());
+
+    let blocks = await Promise.allSettled(rpcs.map(async rpc => {
+        const provider = new ethers.providers.JsonRpcProvider(rpc);
+        return {
+            rpc,
+            height: await awaitWithTimeout(provider.getBlockNumber(), 10000)
+        };
+    }));
+
+    let responses = _.chain(blocks)
+        .filter(x => x.status === "fulfilled")
+        .map(x => x.value);
+
+    let [reliableBlock] = responses
+        .groupBy("height")
+        .map((g, k) => {
+            return [k, g]
+        })
+        .sort((a, b) => b[1].length - a[1].length)
+        .at(0)
+        .valueOf();
+
+    let reliableRpcs = responses
+        .filter(x => Math.abs(x.height - Number(reliableBlock[0])) < 5)
+        .valueOf();
+
+    return reliableRpcs;
 }
 
 async function getParsedLogs(provider, address, fromBlock, toBlock) {
@@ -126,6 +171,19 @@ async function getParsedLogs(provider, address, fromBlock, toBlock) {
     return result;
 }
 
+function awaitWithTimeout(promise, timeout, timeoutError = new Error('Operation timed out')) {
+    // Create a promise that rejects in <timeout> milliseconds
+    let timeoutPromise = new Promise((_, reject) => {
+        let id = setTimeout(() => {
+            clearTimeout(id);
+            reject(timeoutError);
+        }, timeout);
+    });
+
+    // Returns a race between our timeout and the passed in promise
+    return Promise.race([promise, timeoutPromise]);
+}
+
 const abi = [{
     "anonymous": false,
     "inputs": [
@@ -145,13 +203,16 @@ const abi = [{
     "type": "event"
 }];
 
-function run() {
-    try {
-        main();
-    } catch (e) {
-        console.log(`${new Date()} + ${JSON.stringify(e)}`)
+async function run() {
+    while (true) {
+        try {
+            await main();
+        } catch (e) {
+            console.error(`${new Date()} + ${JSON.stringify(e)}`);
+        } finally {
+            await new Promise(res => setTimeout(res, 60000));
+        }
     }
 }
 
-setInterval(run, 60000);
 run()
